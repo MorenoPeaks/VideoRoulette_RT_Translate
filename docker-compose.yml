@@ -1,0 +1,10 @@
+# Local LiveKit server for development.
+# For production use LiveKit Cloud (free tier) or a hardened self-hosted deploy.
+services:
+  livekit:
+    image: livekit/livekit-server:latest
+    command: --bind 0.0.0.0 --keys "devkey: devsecret_devsecret_devsecret_32"
+    ports:
+      - "7880:7880"   # WebSocket / HTTP
+      - "7881:7881"   # TCP fallback
+      - "7882:7882/udp" # media over UDP
