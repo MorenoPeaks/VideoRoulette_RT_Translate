@@ -16,30 +16,36 @@ export async function createTranslationClientSecret(
   if (!key) {
     return { ok: false, status: 503, error: "OPENAI_API_KEY is not configured" };
   }
-  const res = await fetch(`${OPENAI_BASE}/realtime/translations/client_secrets`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${key}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      session: {
-        model: "gpt-realtime-translate",
-        audio: {
-          input: {
-            transcription: { model: "gpt-realtime-whisper" },
-            noise_reduction: { type: "near_field" },
-          },
-          output: { language },
-        },
+  try {
+    const res = await fetch(`${OPENAI_BASE}/realtime/translations/client_secrets`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${key}`,
+        "Content-Type": "application/json",
       },
-    }),
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    return { ok: false, status: res.status, error: text };
+      signal: AbortSignal.timeout(10_000),
+      body: JSON.stringify({
+        session: {
+          model: "gpt-realtime-translate",
+          audio: {
+            input: {
+              transcription: { model: "gpt-realtime-whisper" },
+              noise_reduction: { type: "near_field" },
+            },
+            output: { language },
+          },
+        },
+      }),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      return { ok: false, status: res.status, error: text };
+    }
+    return { ok: true, data: await res.json() };
+  } catch (err) {
+    console.error("client secret request failed:", err);
+    return { ok: false, status: 502, error: "could not reach OpenAI" };
   }
-  return { ok: true, data: await res.json() };
 }
 
 /**
@@ -60,6 +66,7 @@ export async function translateText(
         Authorization: `Bearer ${key}`,
         "Content-Type": "application/json",
       },
+      signal: AbortSignal.timeout(10_000),
       body: JSON.stringify({
         model: process.env.CHAT_TRANSLATION_MODEL ?? "gpt-4o-mini",
         messages: [

@@ -29,6 +29,13 @@ const queue = new MatchmakingQueue();
 /** socketId -> active match state */
 const matches = new Map<string, ActiveMatch>();
 
+/** Language codes come from the client; never forward arbitrary strings. */
+const LANGUAGE_RE = /^[a-z]{2,3}(-[A-Za-z]{2,4})?$/;
+
+function isConnected(socketId: string): boolean {
+  return io.sockets.sockets.has(socketId);
+}
+
 app.get("/health", (_req, res) => {
   res.json({ ok: true, waiting: queue.size, activeUsers: matches.size });
 });
@@ -36,11 +43,18 @@ app.get("/health", (_req, res) => {
 /**
  * The browser of the LISTENER calls this to obtain an ephemeral OpenAI
  * client secret for a Realtime Translation WebRTC session in its language.
+ * Secrets cost money to use, so only sockets currently in an active match
+ * may request one (the client sends its own socket id as proof).
  */
 app.post("/api/translation-secret", async (req, res) => {
   const language = typeof req.body?.language === "string" ? req.body.language : "";
-  if (!language) {
-    res.status(400).json({ error: "language is required" });
+  const socketId = typeof req.body?.socketId === "string" ? req.body.socketId : "";
+  if (!LANGUAGE_RE.test(language)) {
+    res.status(400).json({ error: "invalid language code" });
+    return;
+  }
+  if (!matches.has(socketId) || !isConnected(socketId)) {
+    res.status(403).json({ error: "not in an active call" });
     return;
   }
   const result = await createTranslationClientSecret(language);
@@ -57,6 +71,16 @@ async function pairUsers(a: UserProfile, b: UserProfile): Promise<void> {
     createRoomToken(livekit, roomName, a.socketId, a.nickname, a.language),
     createRoomToken(livekit, roomName, b.socketId, b.nickname, b.language),
   ]);
+
+  // A socket may have disconnected while we were creating tokens; pairing it
+  // anyway would strand the survivor in an empty room with no partner:left.
+  const aAlive = isConnected(a.socketId);
+  const bAlive = isConnected(b.socketId);
+  if (!aAlive || !bAlive) {
+    const survivor = aAlive ? a : bAlive ? b : null;
+    if (survivor) requeue(survivor);
+    return;
+  }
 
   matches.set(a.socketId, { roomName, partnerId: b.socketId, self: a });
   matches.set(b.socketId, { roomName, partnerId: a.socketId, self: b });
@@ -84,6 +108,24 @@ async function pairUsers(a: UserProfile, b: UserProfile): Promise<void> {
   );
 }
 
+/** Puts a user in the queue, pairing immediately when possible. */
+function requeue(user: UserProfile): void {
+  const pair = queue.join(user);
+  if (!pair) {
+    io.to(user.socketId).emit("queue:waiting");
+    return;
+  }
+  void pairUsers(pair[0], pair[1]).catch((err) => {
+    console.error("failed to create match:", err);
+    for (const u of pair) {
+      matches.delete(u.socketId);
+      io.to(u.socketId).emit("queue:error", {
+        error: "Failed to create the room, please retry",
+      });
+    }
+  });
+}
+
 /** Tears down the match for `socketId`, notifying the partner. */
 function leaveMatch(socketId: string, notifyPartner: boolean): void {
   const match = matches.get(socketId);
@@ -99,10 +141,10 @@ function leaveMatch(socketId: string, notifyPartner: boolean): void {
 }
 
 io.on("connection", (socket) => {
-  socket.on("queue:join", async (data: { nickname?: string; language?: string }) => {
+  socket.on("queue:join", (data: { nickname?: string; language?: string }) => {
     const language = typeof data?.language === "string" ? data.language : "";
-    if (!language) {
-      socket.emit("queue:error", { error: "language is required" });
+    if (!LANGUAGE_RE.test(language)) {
+      socket.emit("queue:error", { error: "invalid language code" });
       return;
     }
     const nickname =
@@ -110,23 +152,9 @@ io.on("connection", (socket) => {
         ? data.nickname.trim().slice(0, 24)
         : "Anonymous";
 
+    // Joining the queue implies leaving any current match ("Next").
     leaveMatch(socket.id, true);
-    const pair = queue.join({ socketId: socket.id, nickname, language });
-    if (pair) {
-      try {
-        await pairUsers(pair[0], pair[1]);
-      } catch (err) {
-        console.error("failed to create match:", err);
-        for (const u of pair) {
-          matches.delete(u.socketId);
-          io.to(u.socketId).emit("queue:error", {
-            error: "Failed to create the room, please retry",
-          });
-        }
-      }
-    } else {
-      socket.emit("queue:waiting");
-    }
+    requeue({ socketId: socket.id, nickname, language });
   });
 
   socket.on("queue:leave", () => {

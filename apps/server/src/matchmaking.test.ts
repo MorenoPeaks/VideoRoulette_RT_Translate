@@ -45,11 +45,4 @@ describe("MatchmakingQueue", () => {
     expect(q.size).toBe(0);
     expect(q.join(user("b"))).toBeNull();
   });
-
-  it("reports queue membership", () => {
-    const q = new MatchmakingQueue();
-    q.join(user("a"));
-    expect(q.has("a")).toBe(true);
-    expect(q.has("b")).toBe(false);
-  });
 });

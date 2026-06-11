@@ -26,10 +26,6 @@ export class MatchmakingQueue {
     this.queue = this.queue.filter((u) => u.socketId !== socketId);
   }
 
-  has(socketId: string): boolean {
-    return this.queue.some((u) => u.socketId === socketId);
-  }
-
   get size(): number {
     return this.queue.length;
   }

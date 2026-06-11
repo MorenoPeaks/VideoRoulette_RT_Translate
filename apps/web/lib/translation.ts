@@ -56,6 +56,9 @@ interface RealtimeEvent {
  * real API key never reaches the browser.
  */
 export class OpenAIRealtimeTranslation implements TranslationProvider {
+  /** `socketId` proves to our server that we are in an active call. */
+  constructor(private readonly socketId: string) {}
+
   async start(
     sourceTrack: MediaStreamTrack,
     targetLanguage: string,
@@ -64,12 +67,16 @@ export class OpenAIRealtimeTranslation implements TranslationProvider {
     const secretRes = await fetch(`${SERVER_URL}/api/translation-secret`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ language: targetLanguage }),
+      signal: AbortSignal.timeout(15_000),
+      body: JSON.stringify({ language: targetLanguage, socketId: this.socketId }),
     });
     if (!secretRes.ok) {
       throw new Error(`failed to obtain translation secret: ${secretRes.status}`);
     }
-    const secret = (await secretRes.json()) as { value?: string; client_secret?: { value?: string } };
+    const secret = (await secretRes.json()) as {
+      value?: string;
+      client_secret?: { value?: string };
+    };
     const ephemeralKey = secret.value ?? secret.client_secret?.value;
     if (!ephemeralKey) {
       throw new Error("translation secret response did not contain a key");
@@ -77,65 +84,72 @@ export class OpenAIRealtimeTranslation implements TranslationProvider {
 
     const pc = new RTCPeerConnection();
     let stopped = false;
-
-    pc.ontrack = (event) => {
-      if (!stopped) callbacks.onTranslatedTrack(event.track);
-    };
-
-    const events = pc.createDataChannel("oai-events");
-    events.onmessage = (msg) => {
-      if (stopped || !callbacks.onTranscript) return;
-      try {
-        const event = JSON.parse(msg.data as string) as RealtimeEvent;
-        const type = event.type ?? "";
-        const text = event.delta ?? event.text ?? event.transcript ?? "";
-        if (!type.includes("transcript") || !text) return;
-        const kind: TranscriptEvent["kind"] = type.includes("input")
-          ? "source"
-          : "translated";
-        callbacks.onTranscript({ kind, text, done: type.endsWith(".done") });
-      } catch {
-        // ignore non-JSON payloads
-      }
-    };
-
-    pc.addTrack(sourceTrack);
-
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-
-    const sdpRes = await fetch(
-      `${OPENAI_CALLS_URL}?model=gpt-realtime-translate`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${ephemeralKey}`,
-          "Content-Type": "application/sdp",
-        },
-        body: offer.sdp,
-      },
-    );
-    if (!sdpRes.ok) {
-      pc.close();
-      throw new Error(`translation call setup failed: ${sdpRes.status}`);
-    }
-    await pc.setRemoteDescription({ type: "answer", sdp: await sdpRes.text() });
-
-    pc.onconnectionstatechange = () => {
-      if (
-        !stopped &&
-        (pc.connectionState === "failed" || pc.connectionState === "disconnected")
-      ) {
-        callbacks.onError?.(new Error(`translation connection ${pc.connectionState}`));
-      }
-    };
-
-    return {
+    const session: TranslationSession = {
       stop() {
         stopped = true;
-        events.close();
         pc.close();
       },
     };
+
+    // Any failure below must release the peer connection, or repeated failed
+    // attempts would pile up open WebRTC sessions pinning the audio track.
+    try {
+      pc.ontrack = (event) => {
+        if (!stopped) callbacks.onTranslatedTrack(event.track);
+      };
+
+      const events = pc.createDataChannel("oai-events");
+      events.onmessage = (msg) => {
+        if (stopped || !callbacks.onTranscript) return;
+        try {
+          const event = JSON.parse(msg.data as string) as RealtimeEvent;
+          const type = event.type ?? "";
+          const text = event.delta ?? event.text ?? event.transcript ?? "";
+          if (!type.includes("transcript") || !text) return;
+          const kind: TranscriptEvent["kind"] = type.includes("input")
+            ? "source"
+            : "translated";
+          callbacks.onTranscript({ kind, text, done: type.endsWith(".done") });
+        } catch {
+          // ignore non-JSON payloads
+        }
+      };
+
+      pc.addTrack(sourceTrack);
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      const sdpRes = await fetch(
+        `${OPENAI_CALLS_URL}?model=gpt-realtime-translate`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${ephemeralKey}`,
+            "Content-Type": "application/sdp",
+          },
+          signal: AbortSignal.timeout(15_000),
+          body: offer.sdp,
+        },
+      );
+      if (!sdpRes.ok) {
+        throw new Error(`translation call setup failed: ${sdpRes.status}`);
+      }
+      await pc.setRemoteDescription({ type: "answer", sdp: await sdpRes.text() });
+
+      pc.onconnectionstatechange = () => {
+        if (
+          !stopped &&
+          (pc.connectionState === "failed" || pc.connectionState === "disconnected")
+        ) {
+          callbacks.onError?.(new Error(`translation connection ${pc.connectionState}`));
+        }
+      };
+
+      return session;
+    } catch (err) {
+      session.stop();
+      throw err;
+    }
   }
 }

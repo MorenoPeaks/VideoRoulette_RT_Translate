@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Room,
   RoomEvent,
@@ -51,36 +51,55 @@ export default function CallScreen({
   const [partnerLeft, setPartnerLeft] = useState(false);
   const [callError, setCallError] = useState<string | null>(null);
 
-  // Keep audio element volumes in sync with the selected mode.
-  useEffect(() => {
-    const [originalVol, translatedVol] = VOLUMES[audioMode];
+  // Single source of truth for element volumes. Track handlers run inside a
+  // long-lived effect closure, so they read the mode through a ref instead of
+  // capturing a stale `audioMode`.
+  const audioModeRef = useRef<AudioMode>(audioMode);
+  const applyVolumes = useCallback(() => {
+    const [originalVol, translatedVol] = VOLUMES[audioModeRef.current];
     if (originalAudioRef.current) originalAudioRef.current.volume = originalVol;
     if (translatedAudioRef.current)
       translatedAudioRef.current.volume = translatedVol;
-  }, [audioMode]);
+  }, []);
+  useEffect(() => {
+    audioModeRef.current = audioMode;
+    applyVolumes();
+  }, [audioMode, applyVolumes]);
 
   useEffect(() => {
     const room = new Room();
     let translationSession: TranslationSession | null = null;
+    let translationStarting = false;
     let disposed = false;
-    const provider = new OpenAIRealtimeTranslation();
+    const provider = new OpenAIRealtimeTranslation(match.self.identity);
     let subtitleBuffer = "";
 
     async function startTranslation(sourceTrack: MediaStreamTrack) {
+      // One session per call: TrackSubscribed can fire more than once for
+      // the same audio (event + the post-connect catch-up loop below).
+      if (translationStarting || translationSession) return;
+      translationStarting = true;
       setTranslationStatus("connecting");
       try {
         translationSession = await provider.start(sourceTrack, myLanguage, {
           onTranslatedTrack(track) {
             if (disposed || !translatedAudioRef.current) return;
             translatedAudioRef.current.srcObject = new MediaStream([track]);
-            translatedAudioRef.current.volume = VOLUMES["translated"][1];
+            applyVolumes();
             void translatedAudioRef.current.play().catch(() => undefined);
             setTranslationStatus("active");
           },
           onTranscript(event) {
             if (disposed || event.kind !== "translated") return;
-            subtitleBuffer = event.done ? "" : subtitleBuffer + event.text;
-            setSubtitle(event.done ? event.text : subtitleBuffer);
+            if (event.done) {
+              // Done events usually carry the full transcript; fall back to
+              // the accumulated deltas when they don't.
+              setSubtitle(event.text || subtitleBuffer);
+              subtitleBuffer = "";
+            } else {
+              subtitleBuffer += event.text;
+              setSubtitle(subtitleBuffer);
+            }
           },
           onError() {
             if (!disposed) setTranslationStatus("error");
@@ -89,6 +108,7 @@ export default function CallScreen({
         if (disposed) translationSession.stop();
       } catch (err) {
         console.error("translation start failed:", err);
+        translationStarting = false;
         if (!disposed) setTranslationStatus("error");
       }
     }
@@ -102,7 +122,7 @@ export default function CallScreen({
       }
       if (track.kind === Track.Kind.Audio && originalAudioRef.current) {
         track.attach(originalAudioRef.current);
-        originalAudioRef.current.volume = VOLUMES[audioMode][0];
+        applyVolumes();
         void startTranslation(track.mediaStreamTrack);
       }
     }
@@ -110,7 +130,9 @@ export default function CallScreen({
     async function connect() {
       room.on(RoomEvent.TrackSubscribed, handleRemoteTrack);
       room.on(RoomEvent.ParticipantDisconnected, () => setPartnerLeft(true));
-      room.on(RoomEvent.Disconnected, () => undefined);
+      // A rejoin (dev-mode double mount, brief network blip) must clear the
+      // "partner left" overlay instead of leaving it stuck on screen.
+      room.on(RoomEvent.ParticipantConnected, () => setPartnerLeft(false));
 
       try {
         await room.connect(match.livekitUrl, match.token);

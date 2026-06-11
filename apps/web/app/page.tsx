@@ -53,10 +53,10 @@ export default function Home() {
     setStage({ name: "lobby" });
   }, []);
 
-  // "Next": leave the room and immediately look for a new partner.
+  // "Next": a single queue:join is enough — the server leaves the current
+  // match (notifying the partner) before re-queueing us.
   const nextPartner = useCallback(() => {
     if (!profile) return;
-    socketRef.current?.emit("match:leave");
     setStage({ name: "searching" });
     socketRef.current?.emit("queue:join", profile);
   }, [profile]);
