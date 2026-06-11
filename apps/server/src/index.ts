@@ -1,6 +1,9 @@
 import "dotenv/config";
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import express from "express";
 import cors from "cors";
 import { Server } from "socket.io";
@@ -20,6 +23,16 @@ const WEB_ORIGIN = process.env.WEB_ORIGIN ?? "http://localhost:3000";
 const app = express();
 app.use(cors({ origin: WEB_ORIGIN }));
 app.use(express.json());
+
+// In production the statically exported web app (apps/web/out) is served by
+// this same server: one deployable service, same origin for socket + API.
+const webDist = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../../web/out",
+);
+if (existsSync(webDist)) {
+  app.use(express.static(webDist));
+}
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, { cors: { origin: WEB_ORIGIN } });

@@ -83,6 +83,23 @@ Open <http://localhost:3000> in **two browser windows** (or two devices),
 pick two different languages, press *Start* in both — you'll be matched and
 each side hears the other translated.
 
+## Deploy to Render (one service, free tier)
+
+The repo ships a [Render Blueprint](https://render.com/docs/blueprint-spec)
+(`render.yaml`) that deploys the matchmaking server **and** the web UI as a
+single free web service (the server serves the statically exported Next.js
+app, so everything runs on one URL with no CORS setup).
+
+1. Create a free account at <https://render.com>
+2. Dashboard → **New** → **Blueprint** → connect this GitHub repository and
+   select the branch containing `render.yaml`
+3. When prompted, paste the secret env vars: `OPENAI_API_KEY`, `LIVEKIT_URL`,
+   `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`
+4. Deploy. Your app is live at `https://<service-name>.onrender.com`
+
+Note: free-tier services spin down when idle — the first visit after a pause
+takes up to a minute to wake up.
+
 ## Scripts
 
 | Command | What it does |

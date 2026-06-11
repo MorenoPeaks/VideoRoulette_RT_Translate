@@ -1,0 +1,21 @@
+# Render Blueprint: deploys the whole app (matchmaking server + web UI) as a
+# single free web service. In the Render dashboard: New → Blueprint → connect
+# this repository → fill in the secret env vars when prompted.
+services:
+  - type: web
+    name: videoroulette
+    runtime: node
+    plan: free
+    branch: claude/beautiful-dirac-ig1mgp
+    buildCommand: npm install && npm run build
+    startCommand: node apps/server/dist/index.js
+    healthCheckPath: /health
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false # paste your sk-... key in the dashboard
+      - key: LIVEKIT_URL
+        sync: false # wss://<project>.livekit.cloud
+      - key: LIVEKIT_API_KEY
+        sync: false
+      - key: LIVEKIT_API_SECRET
+        sync: false
