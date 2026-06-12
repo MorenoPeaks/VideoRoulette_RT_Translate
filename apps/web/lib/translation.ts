@@ -71,7 +71,12 @@ export class OpenAIRealtimeTranslation implements TranslationProvider {
       body: JSON.stringify({ language: targetLanguage, socketId: this.socketId }),
     });
     if (!secretRes.ok) {
-      throw new Error(`failed to obtain translation secret: ${secretRes.status}`);
+      // Bubble up the body too: it carries OpenAI's actual reason
+      // (insufficient_quota, invalid_api_key, model access, …).
+      const body = await secretRes.text().catch(() => "");
+      throw new Error(
+        `translation secret ${secretRes.status}: ${body.slice(0, 300)}`,
+      );
     }
     const secret = (await secretRes.json()) as {
       value?: string;

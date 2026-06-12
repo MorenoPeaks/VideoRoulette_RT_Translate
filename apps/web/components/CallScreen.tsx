@@ -52,6 +52,7 @@ export default function CallScreen({
   const [subtitle, setSubtitle] = useState("");
   const [partnerLeft, setPartnerLeft] = useState(false);
   const [callError, setCallError] = useState<string | null>(null);
+  const [translationError, setTranslationError] = useState<string | null>(null);
 
   // Single source of truth for element volumes. Track handlers run inside a
   // long-lived effect closure, so they read the mode through a ref instead of
@@ -104,15 +105,20 @@ export default function CallScreen({
               setSubtitle(subtitleBuffer);
             }
           },
-          onError() {
-            if (!disposed) setTranslationStatus("error");
+          onError(err) {
+            if (disposed) return;
+            setTranslationStatus("error");
+            setTranslationError(err.message);
           },
         });
         if (disposed) translationSession.stop();
       } catch (err) {
         console.error("translation start failed:", err);
         translationStarting = false;
-        if (!disposed) setTranslationStatus("error");
+        if (!disposed) {
+          setTranslationStatus("error");
+          setTranslationError(err instanceof Error ? err.message : String(err));
+        }
       }
     }
 
@@ -231,6 +237,11 @@ export default function CallScreen({
           >
             {statusBadge[translationStatus].text}
           </span>
+          {translationError && (
+            <span className="rounded-full bg-black/70 px-3 py-1 text-xs text-red-300">
+              {translationError}
+            </span>
+          )}
         </div>
 
         {/* Local preview */}
