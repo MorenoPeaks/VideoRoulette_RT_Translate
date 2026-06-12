@@ -13,7 +13,7 @@ import {
 } from "livekit-client";
 import type { Socket } from "socket.io-client";
 import ChatPanel from "@/components/ChatPanel";
-import { languageLabel, OUTPUT_LANGUAGES } from "@/lib/languages";
+import { languageLabel, OUTPUT_LANGUAGES, supportsAdaptive } from "@/lib/languages";
 import {
   OpenAIRealtimeTranslation,
   type EngineConfig,
@@ -305,6 +305,8 @@ export default function CallScreen({
 
   function changeVoiceEngine(engine: VoiceEngine) {
     if (engine === voiceEngine) return;
+    // The adaptive engine only outputs its 13 supported languages.
+    if (engine === "adaptive" && !supportsAdaptive(listenLanguageRef.current)) return;
     setVoiceEngine(engine);
     voiceEngineRef.current = engine;
     controlsRef.current?.restartTranslation();
@@ -313,6 +315,11 @@ export default function CallScreen({
   function changeListenLanguage(language: string) {
     setListenLanguage(language);
     listenLanguageRef.current = language;
+    // Languages outside the adaptive engine's roster force the fixed voice.
+    if (!supportsAdaptive(language) && voiceEngineRef.current === "adaptive") {
+      setVoiceEngine("fixed-voice");
+      voiceEngineRef.current = "fixed-voice";
+    }
     socket.emit("language:change", { language });
     onLanguageChange(language);
     // Restart the translation session so the new language takes effect now.
@@ -467,20 +474,42 @@ export default function CallScreen({
                 ["fixed-voice", "Stable voice"],
                 ["adaptive", "Adaptive (fastest)"],
               ] as [VoiceEngine, string][]
-            ).map(([engine, label]) => (
-              <button
-                key={engine}
-                onClick={() => changeVoiceEngine(engine)}
-                className={`rounded-lg px-2 py-2 ${
-                  voiceEngine === engine
-                    ? "bg-indigo-600 font-semibold"
-                    : "bg-zinc-800 hover:bg-zinc-700"
-                }`}
-              >
-                {label}
-              </button>
-            ))}
+            ).map(([engine, label]) => {
+              const unavailable =
+                engine === "adaptive" && !supportsAdaptive(listenLanguage);
+              return (
+                <button
+                  key={engine}
+                  onClick={() => changeVoiceEngine(engine)}
+                  disabled={unavailable}
+                  title={
+                    unavailable
+                      ? "The adaptive engine does not support this language"
+                      : undefined
+                  }
+                  className={`rounded-lg px-2 py-2 ${
+                    voiceEngine === engine
+                      ? "bg-indigo-600 font-semibold"
+                      : unavailable
+                        ? "cursor-not-allowed bg-zinc-800/40 text-zinc-600"
+                        : "bg-zinc-800 hover:bg-zinc-700"
+                  }`}
+                >
+                  {label}
+                </button>
+              );
+            })}
           </div>
+          {/* Shows exactly which voice this client is using for the partner,
+              so a gender mismatch (e.g. a stale client that never sent its
+              gender) is visible at a glance. */}
+          <p className="mt-2 text-xs text-zinc-500">
+            {voiceEngine === "fixed-voice"
+              ? match.partner.gender === "female"
+                ? "Voice for your partner: Marin (female 👩)"
+                : "Voice for your partner: Cedar (male 👨)"
+              : "Voice imitates the speaker (may vary between sentences)"}
+          </p>
         </div>
 
         {/* Live transcript of the translation */}

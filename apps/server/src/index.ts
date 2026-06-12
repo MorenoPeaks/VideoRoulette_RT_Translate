@@ -95,6 +95,9 @@ app.post("/api/translation-secret", async (req, res) => {
     res.status(403).json({ error: "not in an active call" });
     return;
   }
+  console.log(
+    `translation secret: engine=${engine} voice=${engine === "fixed-voice" ? voice : "adaptive"} lang=${language}`,
+  );
   const result =
     engine === "fixed-voice"
       ? await createFixedVoiceClientSecret(language, voice)
