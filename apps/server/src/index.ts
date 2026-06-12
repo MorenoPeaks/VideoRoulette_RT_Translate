@@ -50,7 +50,20 @@ function isConnected(socketId: string): boolean {
 }
 
 app.get("/health", (_req, res) => {
-  res.json({ ok: true, waiting: queue.size, activeUsers: matches.size });
+  const openaiKey = process.env.OPENAI_API_KEY?.trim() ?? "";
+  res.json({
+    ok: true,
+    waiting: queue.size,
+    activeUsers: matches.size,
+    // Diagnostics: never the key itself, just enough to spot a missing or
+    // mangled value (an OpenAI key must start with "sk-").
+    openai: !openaiKey
+      ? "MISSING"
+      : openaiKey.startsWith("sk-")
+        ? "configured"
+        : "INVALID FORMAT (must start with sk-)",
+    livekitUrl: livekit.url,
+  });
 });
 
 /**
