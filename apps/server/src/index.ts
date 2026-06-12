@@ -209,7 +209,11 @@ io.on("connection", (socket) => {
 
 httpServer.listen(PORT, () => {
   console.log(`matchmaking server listening on :${PORT}`);
-  console.log(`LiveKit: ${livekit.url}`);
+  // Log the URL and API key (not the secret) so the LiveKit credentials can
+  // be cross-checked against the project in the LiveKit Cloud dashboard —
+  // the API key must belong to the same project as the URL.
+  console.log(`LiveKit URL: ${livekit.url}`);
+  console.log(`LiveKit API key: ${livekit.apiKey}`);
   console.log(
     `OpenAI key: ${process.env.OPENAI_API_KEY ? "configured" : "MISSING (translation disabled)"}`,
   );

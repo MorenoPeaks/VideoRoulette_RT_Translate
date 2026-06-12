@@ -7,10 +7,14 @@ export interface LiveKitConfig {
 }
 
 export function loadLiveKitConfig(): LiveKitConfig {
-  const url = process.env.LIVEKIT_URL ?? "ws://localhost:7880";
-  const apiKey = process.env.LIVEKIT_API_KEY ?? "devkey";
-  const apiSecret =
-    process.env.LIVEKIT_API_SECRET ?? "devsecret_devsecret_devsecret_32";
+  // Trim to defend against whitespace/newlines accidentally pasted into the
+  // host's env vars — a stray character in the secret breaks the token
+  // signature and LiveKit rejects it with "invalid token".
+  const url = (process.env.LIVEKIT_URL ?? "ws://localhost:7880").trim();
+  const apiKey = (process.env.LIVEKIT_API_KEY ?? "devkey").trim();
+  const apiSecret = (
+    process.env.LIVEKIT_API_SECRET ?? "devsecret_devsecret_devsecret_32"
+  ).trim();
   return { url, apiKey, apiSecret };
 }
 
