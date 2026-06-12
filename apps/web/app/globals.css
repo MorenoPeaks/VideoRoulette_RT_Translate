@@ -7,3 +7,19 @@
 body {
   @apply bg-zinc-950 text-zinc-100 antialiased;
 }
+
+/* Always-visible thin scrollbar (mobile browsers hide the default one). */
+.nice-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: #71717a transparent;
+}
+.nice-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+.nice-scrollbar::-webkit-scrollbar-thumb {
+  background: #71717a;
+  border-radius: 3px;
+}
+.nice-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}

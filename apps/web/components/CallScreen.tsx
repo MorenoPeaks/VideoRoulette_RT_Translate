@@ -337,8 +337,9 @@ export default function CallScreen({
           )}
         </div>
 
-        {/* Cam/mic controls */}
-        <div className="absolute bottom-3 left-1/2 flex -translate-x-1/2 gap-2">
+        {/* Cam/mic controls: left-aligned on mobile so they never hide
+            behind the local preview in the bottom-right corner. */}
+        <div className="absolute bottom-3 left-3 flex gap-2 lg:left-1/2 lg:-translate-x-1/2">
           <button
             onClick={() => void controlsRef.current?.toggleMic()}
             title={micOn ? "Mute microphone" : "Unmute microphone"}
@@ -372,7 +373,7 @@ export default function CallScreen({
           autoPlay
           playsInline
           muted
-          className="absolute bottom-3 right-3 h-28 w-40 rounded-xl border border-zinc-700 object-cover shadow-lg"
+          className="absolute bottom-3 right-3 h-20 w-28 rounded-xl border border-zinc-700 object-cover shadow-lg lg:h-28 lg:w-40"
         />
 
         {/* Partner left overlay */}
@@ -444,7 +445,10 @@ export default function CallScreen({
           <p className="mb-2 text-xs uppercase tracking-wide text-zinc-500">
             Transcript
           </p>
-          <div ref={transcriptRef} className="max-h-40 space-y-1 overflow-y-auto pr-1 text-sm">
+          <div
+            ref={transcriptRef}
+            className="nice-scrollbar h-48 space-y-1 overflow-y-scroll pr-2 text-sm"
+          >
             {transcriptLines.length === 0 && !partialLine && (
               <p className="text-zinc-600">
                 What your partner says appears here, translated.
