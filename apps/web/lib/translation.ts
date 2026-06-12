@@ -35,7 +35,13 @@ export interface TranslationProvider {
   ): Promise<TranslationSession>;
 }
 
-const OPENAI_CALLS_URL = "https://api.openai.com/v1/realtime/translations/calls";
+const TRANSLATE_CALLS_URL =
+  "https://api.openai.com/v1/realtime/translations/calls?model=gpt-realtime-translate";
+const REALTIME_CALLS_URL = "https://api.openai.com/v1/realtime/calls";
+
+export type EngineConfig =
+  | { engine: "adaptive" }
+  | { engine: "fixed-voice"; voice: "cedar" | "marin" };
 
 interface RealtimeEvent {
   type?: string;
@@ -57,7 +63,10 @@ interface RealtimeEvent {
  */
 export class OpenAIRealtimeTranslation implements TranslationProvider {
   /** `socketId` proves to our server that we are in an active call. */
-  constructor(private readonly socketId: string) {}
+  constructor(
+    private readonly socketId: string,
+    private readonly config: EngineConfig = { engine: "adaptive" },
+  ) {}
 
   async start(
     sourceTrack: MediaStreamTrack,
@@ -68,7 +77,12 @@ export class OpenAIRealtimeTranslation implements TranslationProvider {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       signal: AbortSignal.timeout(15_000),
-      body: JSON.stringify({ language: targetLanguage, socketId: this.socketId }),
+      body: JSON.stringify({
+        language: targetLanguage,
+        socketId: this.socketId,
+        engine: this.config.engine,
+        voice: this.config.engine === "fixed-voice" ? this.config.voice : undefined,
+      }),
     });
     if (!secretRes.ok) {
       // Bubble up the body too: it carries OpenAI's actual reason
@@ -126,7 +140,9 @@ export class OpenAIRealtimeTranslation implements TranslationProvider {
       await pc.setLocalDescription(offer);
 
       const sdpRes = await fetch(
-        `${OPENAI_CALLS_URL}?model=gpt-realtime-translate`,
+        this.config.engine === "fixed-voice"
+          ? REALTIME_CALLS_URL
+          : TRANSLATE_CALLS_URL,
         {
           method: "POST",
           headers: {

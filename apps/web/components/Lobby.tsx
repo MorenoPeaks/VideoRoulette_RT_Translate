@@ -2,18 +2,20 @@
 
 import { useState } from "react";
 import { OUTPUT_LANGUAGES } from "@/lib/languages";
+import type { Gender } from "@/lib/types";
 
 export default function Lobby({
   onStart,
   error,
   initialProfile,
 }: {
-  onStart: (nickname: string, language: string) => void;
+  onStart: (nickname: string, language: string, gender: Gender) => void;
   error: string | null;
-  initialProfile: { nickname: string; language: string } | null;
+  initialProfile: { nickname: string; language: string; gender: Gender } | null;
 }) {
   const [nickname, setNickname] = useState(initialProfile?.nickname ?? "");
   const [language, setLanguage] = useState(initialProfile?.language ?? "en");
+  const [gender, setGender] = useState<Gender>(initialProfile?.gender ?? "male");
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-center gap-8 px-4">
@@ -31,7 +33,7 @@ export default function Lobby({
         className="flex w-full max-w-sm flex-col gap-4"
         onSubmit={(e) => {
           e.preventDefault();
-          onStart(nickname, language);
+          onStart(nickname, language, gender);
         }}
       >
         <label className="flex flex-col gap-1 text-sm text-zinc-300">
@@ -59,6 +61,33 @@ export default function Lobby({
             ))}
           </select>
         </label>
+
+        <fieldset className="flex flex-col gap-1 text-sm text-zinc-300">
+          <legend className="mb-1">
+            I am — sets the voice your partner hears for you
+          </legend>
+          <div className="grid grid-cols-2 gap-2">
+            {(
+              [
+                ["male", "👨 Male"],
+                ["female", "👩 Female"],
+              ] as [Gender, string][]
+            ).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setGender(value)}
+                className={`rounded-lg px-3 py-2 text-base ${
+                  gender === value
+                    ? "bg-indigo-600 font-semibold"
+                    : "border border-zinc-700 bg-zinc-900 hover:bg-zinc-800"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </fieldset>
 
         <button
           type="submit"

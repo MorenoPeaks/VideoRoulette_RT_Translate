@@ -6,6 +6,7 @@ const user = (id: string, language = "en"): UserProfile => ({
   socketId: id,
   nickname: `user-${id}`,
   language,
+  gender: "male",
 });
 
 describe("MatchmakingQueue", () => {

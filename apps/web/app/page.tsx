@@ -6,7 +6,7 @@ import Lobby from "@/components/Lobby";
 import CallScreen from "@/components/CallScreen";
 import SearchingScreen from "@/components/SearchingScreen";
 import { SERVER_URL } from "@/lib/config";
-import type { MatchFoundPayload } from "@/lib/types";
+import type { Gender, MatchFoundPayload } from "@/lib/types";
 
 type Stage =
   | { name: "lobby" }
@@ -16,7 +16,11 @@ type Stage =
 export default function Home() {
   const socketRef = useRef<Socket | null>(null);
   const [stage, setStage] = useState<Stage>({ name: "lobby" });
-  const [profile, setProfile] = useState<{ nickname: string; language: string } | null>(null);
+  const [profile, setProfile] = useState<{
+    nickname: string;
+    language: string;
+    gender: Gender;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -42,12 +46,15 @@ export default function Home() {
     };
   }, []);
 
-  const startSearch = useCallback((nickname: string, language: string) => {
-    setProfile({ nickname, language });
-    setError(null);
-    setStage({ name: "searching" });
-    socketRef.current?.emit("queue:join", { nickname, language });
-  }, []);
+  const startSearch = useCallback(
+    (nickname: string, language: string, gender: Gender) => {
+      setProfile({ nickname, language, gender });
+      setError(null);
+      setStage({ name: "searching" });
+      socketRef.current?.emit("queue:join", { nickname, language, gender });
+    },
+    [],
+  );
 
   const cancelSearch = useCallback(() => {
     socketRef.current?.emit("queue:leave");

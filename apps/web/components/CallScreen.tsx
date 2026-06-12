@@ -16,9 +16,10 @@ import ChatPanel from "@/components/ChatPanel";
 import { languageLabel, OUTPUT_LANGUAGES } from "@/lib/languages";
 import {
   OpenAIRealtimeTranslation,
+  type EngineConfig,
   type TranslationSession,
 } from "@/lib/translation";
-import type { AudioMode, MatchFoundPayload } from "@/lib/types";
+import type { AudioMode, MatchFoundPayload, VoiceEngine } from "@/lib/types";
 
 type TranslationStatus = "idle" | "connecting" | "active" | "error";
 
@@ -71,6 +72,8 @@ export default function CallScreen({
   const [partnerLanguage, setPartnerLanguage] = useState(match.partner.language);
   const [micOn, setMicOn] = useState(true);
   const [camOn, setCamOn] = useState(true);
+  const [voiceEngine, setVoiceEngine] = useState<VoiceEngine>("fixed-voice");
+  const voiceEngineRef = useRef<VoiceEngine>(voiceEngine);
 
   // Single source of truth for element volumes. Track handlers run inside a
   // long-lived effect closure, so they read the mode through a ref instead of
@@ -104,8 +107,10 @@ export default function CallScreen({
     let lastAudioTrack: MediaStreamTrack | null = null;
     let facingMode: "user" | "environment" = "user";
     let disposed = false;
-    const provider = new OpenAIRealtimeTranslation(match.self.identity);
     let subtitleBuffer = "";
+
+    // The voice that replaces the partner's: their declared gender drives it.
+    const fixedVoice = match.partner.gender === "female" ? "marin" : "cedar";
 
     async function startTranslation(sourceTrack: MediaStreamTrack) {
       // One session per call: TrackSubscribed can fire more than once for
@@ -113,6 +118,14 @@ export default function CallScreen({
       if (translationStarting || translationSession) return;
       translationStarting = true;
       setTranslationStatus("connecting");
+      const engineConfig: EngineConfig =
+        voiceEngineRef.current === "fixed-voice"
+          ? { engine: "fixed-voice", voice: fixedVoice }
+          : { engine: "adaptive" };
+      const provider = new OpenAIRealtimeTranslation(
+        match.self.identity,
+        engineConfig,
+      );
       try {
         translationSession = await provider.start(
           sourceTrack,
@@ -290,6 +303,13 @@ export default function CallScreen({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [match.roomName]);
 
+  function changeVoiceEngine(engine: VoiceEngine) {
+    if (engine === voiceEngine) return;
+    setVoiceEngine(engine);
+    voiceEngineRef.current = engine;
+    controlsRef.current?.restartTranslation();
+  }
+
   function changeListenLanguage(language: string) {
     setListenLanguage(language);
     listenLanguageRef.current = language;
@@ -430,6 +450,29 @@ export default function CallScreen({
                 onClick={() => setAudioMode(mode)}
                 className={`rounded-lg px-2 py-2 ${
                   audioMode === mode
+                    ? "bg-indigo-600 font-semibold"
+                    : "bg-zinc-800 hover:bg-zinc-700"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <p className="mb-2 mt-3 text-xs uppercase tracking-wide text-zinc-500">
+            Voice engine
+          </p>
+          <div className="grid grid-cols-2 gap-2 text-sm">
+            {(
+              [
+                ["fixed-voice", "Stable voice"],
+                ["adaptive", "Adaptive (fastest)"],
+              ] as [VoiceEngine, string][]
+            ).map(([engine, label]) => (
+              <button
+                key={engine}
+                onClick={() => changeVoiceEngine(engine)}
+                className={`rounded-lg px-2 py-2 ${
+                  voiceEngine === engine
                     ? "bg-indigo-600 font-semibold"
                     : "bg-zinc-800 hover:bg-zinc-700"
                 }`}

@@ -9,7 +9,11 @@ import cors from "cors";
 import { Server } from "socket.io";
 import { MatchmakingQueue } from "./matchmaking.js";
 import { createRoomToken, loadLiveKitConfig } from "./livekit.js";
-import { createTranslationClientSecret, translateText } from "./openai.js";
+import {
+  createFixedVoiceClientSecret,
+  createTranslationClientSecret,
+  translateText,
+} from "./openai.js";
 import type {
   ActiveMatch,
   ChatMessagePayload,
@@ -72,18 +76,29 @@ app.get("/health", (_req, res) => {
  * Secrets cost money to use, so only sockets currently in an active match
  * may request one (the client sends its own socket id as proof).
  */
+const FIXED_VOICES = new Set(["cedar", "marin"]);
+
 app.post("/api/translation-secret", async (req, res) => {
   const language = typeof req.body?.language === "string" ? req.body.language : "";
   const socketId = typeof req.body?.socketId === "string" ? req.body.socketId : "";
+  const engine = req.body?.engine === "fixed-voice" ? "fixed-voice" : "adaptive";
+  const voice = typeof req.body?.voice === "string" ? req.body.voice : "cedar";
   if (!LANGUAGE_RE.test(language)) {
     res.status(400).json({ error: "invalid language code" });
+    return;
+  }
+  if (engine === "fixed-voice" && !FIXED_VOICES.has(voice)) {
+    res.status(400).json({ error: "invalid voice" });
     return;
   }
   if (!matches.has(socketId) || !isConnected(socketId)) {
     res.status(403).json({ error: "not in an active call" });
     return;
   }
-  const result = await createTranslationClientSecret(language);
+  const result =
+    engine === "fixed-voice"
+      ? await createFixedVoiceClientSecret(language, voice)
+      : await createTranslationClientSecret(language);
   if (!result.ok) {
     res.status(result.status).json({ error: result.error });
     return;
@@ -124,6 +139,7 @@ async function pairUsers(a: UserProfile, b: UserProfile): Promise<void> {
       identity: partner.socketId,
       nickname: partner.nickname,
       language: partner.language,
+      gender: partner.gender,
     },
   });
 
@@ -167,21 +183,25 @@ function leaveMatch(socketId: string, notifyPartner: boolean): void {
 }
 
 io.on("connection", (socket) => {
-  socket.on("queue:join", (data: { nickname?: string; language?: string }) => {
-    const language = typeof data?.language === "string" ? data.language : "";
-    if (!LANGUAGE_RE.test(language)) {
-      socket.emit("queue:error", { error: "invalid language code" });
-      return;
-    }
-    const nickname =
-      typeof data?.nickname === "string" && data.nickname.trim()
-        ? data.nickname.trim().slice(0, 24)
-        : "Anonymous";
+  socket.on(
+    "queue:join",
+    (data: { nickname?: string; language?: string; gender?: string }) => {
+      const language = typeof data?.language === "string" ? data.language : "";
+      if (!LANGUAGE_RE.test(language)) {
+        socket.emit("queue:error", { error: "invalid language code" });
+        return;
+      }
+      const nickname =
+        typeof data?.nickname === "string" && data.nickname.trim()
+          ? data.nickname.trim().slice(0, 24)
+          : "Anonymous";
+      const gender = data?.gender === "female" ? "female" : "male";
 
-    // Joining the queue implies leaving any current match ("Next").
-    leaveMatch(socket.id, true);
-    requeue({ socketId: socket.id, nickname, language });
-  });
+      // Joining the queue implies leaving any current match ("Next").
+      leaveMatch(socket.id, true);
+      requeue({ socketId: socket.id, nickname, language, gender });
+    },
+  );
 
   socket.on("queue:leave", () => {
     queue.remove(socket.id);
