@@ -134,8 +134,10 @@ export default function CallScreen({
       // "partner left" overlay instead of leaving it stuck on screen.
       room.on(RoomEvent.ParticipantConnected, () => setPartnerLeft(false));
 
+      // Turn the camera/mic on FIRST and show the local preview. This proves
+      // the permissions work and gives instant feedback even if the LiveKit
+      // connection (next step) fails.
       try {
-        await room.connect(match.livekitUrl, match.token);
         await room.localParticipant.enableCameraAndMicrophone();
         const camPub = room.localParticipant.getTrackPublication(
           Track.Source.Camera,
@@ -143,6 +145,20 @@ export default function CallScreen({
         if (camPub?.track && localVideoRef.current) {
           camPub.track.attach(localVideoRef.current);
         }
+      } catch (err) {
+        console.error("camera/microphone error:", err);
+        if (!disposed)
+          setCallError(
+            "Camera or microphone unavailable. Check that no other app is using them and that you allowed access.",
+          );
+        return;
+      }
+
+      // Now join the room. A wrong/unreachable LIVEKIT_URL is the usual
+      // failure here (e.g. an insecure ws:// URL on an https:// site, or the
+      // server's LiveKit env vars not set), so surface the real reason.
+      try {
+        await room.connect(match.livekitUrl, match.token);
         // Tracks published before we attached the listener:
         for (const participant of room.remoteParticipants.values()) {
           for (const pub of participant.trackPublications.values()) {
@@ -150,8 +166,17 @@ export default function CallScreen({
           }
         }
       } catch (err) {
-        console.error("failed to join the call:", err);
-        if (!disposed) setCallError("Could not join the call (camera/mic or connection problem).");
+        console.error("failed to join the call:", err, "url:", match.livekitUrl);
+        if (!disposed) {
+          const insecure = match.livekitUrl.startsWith("ws://");
+          setCallError(
+            insecure
+              ? "Server misconfigured: LIVEKIT_URL must be a wss:// address. Check the env vars on your host."
+              : `Could not connect to the video server (${match.livekitUrl}). ${
+                  err instanceof Error ? err.message : ""
+                }`,
+          );
+        }
       }
     }
 
