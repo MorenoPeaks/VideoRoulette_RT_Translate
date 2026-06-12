@@ -187,6 +187,17 @@ io.on("connection", (socket) => {
     queue.remove(socket.id);
   });
 
+  // Mid-call language switch: chat translations must target the new
+  // language, and the partner's UI shows what we now hear.
+  socket.on("language:change", (data: { language?: string }) => {
+    const language = typeof data?.language === "string" ? data.language : "";
+    if (!LANGUAGE_RE.test(language)) return;
+    const match = matches.get(socket.id);
+    if (!match) return;
+    match.self.language = language;
+    io.to(match.partnerId).emit("partner:language", { language });
+  });
+
   // "Next" / hang up: leave the current room; the client decides whether to
   // re-join the queue afterwards.
   socket.on("match:leave", () => {

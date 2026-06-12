@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  LocalVideoTrack,
   Room,
   RoomEvent,
   Track,
@@ -12,7 +13,7 @@ import {
 } from "livekit-client";
 import type { Socket } from "socket.io-client";
 import ChatPanel from "@/components/ChatPanel";
-import { languageLabel } from "@/lib/languages";
+import { languageLabel, OUTPUT_LANGUAGES } from "@/lib/languages";
 import {
   OpenAIRealtimeTranslation,
   type TranslationSession,
@@ -28,31 +29,48 @@ const VOLUMES: Record<AudioMode, [number, number]> = {
   both: [0.05, 1], // interpreter style: original barely audible underneath
 };
 
+/** Imperative call controls owned by the connection effect. */
+interface CallControls {
+  toggleMic(): Promise<void>;
+  toggleCam(): Promise<void>;
+  flipCamera(): Promise<void>;
+  restartTranslation(): void;
+}
+
 export default function CallScreen({
   match,
   myLanguage,
   socket,
   onNext,
   onHangUp,
+  onLanguageChange,
 }: {
   match: MatchFoundPayload;
   myLanguage: string;
   socket: Socket;
   onNext: () => void;
   onHangUp: () => void;
+  onLanguageChange: (language: string) => void;
 }) {
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const originalAudioRef = useRef<HTMLAudioElement>(null);
   const translatedAudioRef = useRef<HTMLAudioElement>(null);
+  const transcriptRef = useRef<HTMLDivElement>(null);
+  const controlsRef = useRef<CallControls | null>(null);
 
   const [audioMode, setAudioMode] = useState<AudioMode>("translated");
   const [translationStatus, setTranslationStatus] =
     useState<TranslationStatus>("idle");
-  const [subtitle, setSubtitle] = useState("");
+  const [transcriptLines, setTranscriptLines] = useState<string[]>([]);
+  const [partialLine, setPartialLine] = useState("");
   const [partnerLeft, setPartnerLeft] = useState(false);
   const [callError, setCallError] = useState<string | null>(null);
   const [translationError, setTranslationError] = useState<string | null>(null);
+  const [listenLanguage, setListenLanguage] = useState(myLanguage);
+  const [partnerLanguage, setPartnerLanguage] = useState(match.partner.language);
+  const [micOn, setMicOn] = useState(true);
+  const [camOn, setCamOn] = useState(true);
 
   // Single source of truth for element volumes. Track handlers run inside a
   // long-lived effect closure, so they read the mode through a ref instead of
@@ -69,11 +87,22 @@ export default function CallScreen({
     applyVolumes();
   }, [audioMode, applyVolumes]);
 
+  // The translation session lives in the effect; it reads the target
+  // language through this ref so a mid-call switch takes effect on restart.
+  const listenLanguageRef = useRef(listenLanguage);
+
+  // Keep the transcript pinned to the latest line.
+  useEffect(() => {
+    transcriptRef.current?.scrollTo({ top: transcriptRef.current.scrollHeight });
+  }, [transcriptLines, partialLine]);
+
   useEffect(() => {
     const room = new Room();
     let translationSession: TranslationSession | null = null;
     let translationStarting = false;
     let localTracks: LocalTrack[] = [];
+    let lastAudioTrack: MediaStreamTrack | null = null;
+    let facingMode: "user" | "environment" = "user";
     let disposed = false;
     const provider = new OpenAIRealtimeTranslation(match.self.identity);
     let subtitleBuffer = "";
@@ -85,32 +114,41 @@ export default function CallScreen({
       translationStarting = true;
       setTranslationStatus("connecting");
       try {
-        translationSession = await provider.start(sourceTrack, myLanguage, {
-          onTranslatedTrack(track) {
-            if (disposed || !translatedAudioRef.current) return;
-            translatedAudioRef.current.srcObject = new MediaStream([track]);
-            applyVolumes();
-            void translatedAudioRef.current.play().catch(() => undefined);
-            setTranslationStatus("active");
+        translationSession = await provider.start(
+          sourceTrack,
+          listenLanguageRef.current,
+          {
+            onTranslatedTrack(track) {
+              if (disposed || !translatedAudioRef.current) return;
+              translatedAudioRef.current.srcObject = new MediaStream([track]);
+              applyVolumes();
+              void translatedAudioRef.current.play().catch(() => undefined);
+              setTranslationStatus("active");
+              setTranslationError(null);
+            },
+            onTranscript(event) {
+              if (disposed || event.kind !== "translated") return;
+              if (event.done) {
+                // Done events usually carry the full transcript; fall back
+                // to the accumulated deltas when they don't.
+                const line = event.text || subtitleBuffer;
+                subtitleBuffer = "";
+                setPartialLine("");
+                if (line.trim()) {
+                  setTranscriptLines((prev) => [...prev.slice(-99), line]);
+                }
+              } else {
+                subtitleBuffer += event.text;
+                setPartialLine(subtitleBuffer);
+              }
+            },
+            onError(err) {
+              if (disposed) return;
+              setTranslationStatus("error");
+              setTranslationError(err.message);
+            },
           },
-          onTranscript(event) {
-            if (disposed || event.kind !== "translated") return;
-            if (event.done) {
-              // Done events usually carry the full transcript; fall back to
-              // the accumulated deltas when they don't.
-              setSubtitle(event.text || subtitleBuffer);
-              subtitleBuffer = "";
-            } else {
-              subtitleBuffer += event.text;
-              setSubtitle(subtitleBuffer);
-            }
-          },
-          onError(err) {
-            if (disposed) return;
-            setTranslationStatus("error");
-            setTranslationError(err.message);
-          },
-        });
+        );
         if (disposed) translationSession.stop();
       } catch (err) {
         console.error("translation start failed:", err);
@@ -132,6 +170,7 @@ export default function CallScreen({
       if (track.kind === Track.Kind.Audio && originalAudioRef.current) {
         track.attach(originalAudioRef.current);
         applyVolumes();
+        lastAudioTrack = track.mediaStreamTrack;
         void startTranslation(track.mediaStreamTrack);
       }
     }
@@ -191,20 +230,74 @@ export default function CallScreen({
       }
     }
 
+    controlsRef.current = {
+      async toggleMic() {
+        const mic = localTracks.find((t) => t.kind === Track.Kind.Audio);
+        if (!mic) return;
+        if (mic.isMuted) await mic.unmute();
+        else await mic.mute();
+        setMicOn(!mic.isMuted);
+      },
+      async toggleCam() {
+        const cam = localTracks.find((t) => t.kind === Track.Kind.Video);
+        if (!cam) return;
+        if (cam.isMuted) await cam.unmute();
+        else await cam.mute();
+        setCamOn(!cam.isMuted);
+      },
+      async flipCamera() {
+        const cam = localTracks.find((t) => t.kind === Track.Kind.Video);
+        if (!(cam instanceof LocalVideoTrack)) return;
+        facingMode = facingMode === "user" ? "environment" : "user";
+        try {
+          await cam.restartTrack({ facingMode });
+        } catch (err) {
+          // Single-camera devices (most desktops) can't flip; revert quietly.
+          facingMode = facingMode === "user" ? "environment" : "user";
+          console.warn("camera flip unavailable:", err);
+        }
+      },
+      restartTranslation() {
+        translationSession?.stop();
+        translationSession = null;
+        translationStarting = false;
+        subtitleBuffer = "";
+        setPartialLine("");
+        setTranslationError(null);
+        setTranslationStatus("idle");
+        if (lastAudioTrack) void startTranslation(lastAudioTrack);
+      },
+    };
+
     void connect();
 
     const onPartnerLeft = () => setPartnerLeft(true);
+    const onPartnerLanguage = (data: { language?: string }) => {
+      if (typeof data?.language === "string") setPartnerLanguage(data.language);
+    };
     socket.on("partner:left", onPartnerLeft);
+    socket.on("partner:language", onPartnerLanguage);
 
     return () => {
       disposed = true;
+      controlsRef.current = null;
       socket.off("partner:left", onPartnerLeft);
+      socket.off("partner:language", onPartnerLanguage);
       translationSession?.stop();
       for (const track of localTracks) track.stop();
       void room.disconnect();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [match.roomName]);
+
+  function changeListenLanguage(language: string) {
+    setListenLanguage(language);
+    listenLanguageRef.current = language;
+    socket.emit("language:change", { language });
+    onLanguageChange(language);
+    // Restart the translation session so the new language takes effect now.
+    controlsRef.current?.restartTranslation();
+  }
 
   const statusBadge: Record<TranslationStatus, { text: string; cls: string }> = {
     idle: { text: "waiting for partner audio", cls: "bg-zinc-700" },
@@ -224,13 +317,13 @@ export default function CallScreen({
           ref={remoteVideoRef}
           autoPlay
           playsInline
-          className="h-full max-h-[calc(100vh-1.5rem)] w-full object-cover"
+          className="h-full max-h-[calc(100vh-1.5rem)] min-h-64 w-full object-cover"
         />
 
         {/* Partner info + translation status */}
         <div className="absolute left-3 top-3 flex flex-wrap items-center gap-2">
           <span className="rounded-full bg-black/60 px-3 py-1 text-sm">
-            {match.partner.nickname} · hears {languageLabel(match.partner.language)}
+            {match.partner.nickname} · hears {languageLabel(partnerLanguage)}
           </span>
           <span
             className={`rounded-full px-3 py-1 text-xs text-white ${statusBadge[translationStatus].cls}`}
@@ -244,6 +337,35 @@ export default function CallScreen({
           )}
         </div>
 
+        {/* Cam/mic controls */}
+        <div className="absolute bottom-3 left-1/2 flex -translate-x-1/2 gap-2">
+          <button
+            onClick={() => void controlsRef.current?.toggleMic()}
+            title={micOn ? "Mute microphone" : "Unmute microphone"}
+            className={`h-12 w-12 rounded-full text-xl backdrop-blur ${
+              micOn ? "bg-black/60 hover:bg-black/80" : "bg-red-700 hover:bg-red-600"
+            }`}
+          >
+            {micOn ? "🎙️" : "🔇"}
+          </button>
+          <button
+            onClick={() => void controlsRef.current?.toggleCam()}
+            title={camOn ? "Turn camera off" : "Turn camera on"}
+            className={`h-12 w-12 rounded-full text-xl backdrop-blur ${
+              camOn ? "bg-black/60 hover:bg-black/80" : "bg-red-700 hover:bg-red-600"
+            }`}
+          >
+            {camOn ? "📷" : "🚫"}
+          </button>
+          <button
+            onClick={() => void controlsRef.current?.flipCamera()}
+            title="Switch camera (front/back)"
+            className="h-12 w-12 rounded-full bg-black/60 text-xl backdrop-blur hover:bg-black/80"
+          >
+            🔄
+          </button>
+        </div>
+
         {/* Local preview */}
         <video
           ref={localVideoRef}
@@ -253,17 +375,10 @@ export default function CallScreen({
           className="absolute bottom-3 right-3 h-28 w-40 rounded-xl border border-zinc-700 object-cover shadow-lg"
         />
 
-        {/* Subtitles */}
-        {subtitle && (
-          <p className="absolute bottom-3 left-1/2 max-w-[70%] -translate-x-1/2 rounded-lg bg-black/70 px-4 py-2 text-center text-lg">
-            {subtitle}
-          </p>
-        )}
-
         {/* Partner left overlay */}
         {(partnerLeft || callError) && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-black/80">
-            <p className="text-xl">
+            <p className="px-6 text-center text-xl">
               {callError ?? "Your partner left the chat."}
             </p>
             <div className="flex gap-3">
@@ -285,11 +400,22 @@ export default function CallScreen({
       </section>
 
       <aside className="flex w-full flex-col gap-3 lg:w-96">
-        {/* Audio mode */}
+        {/* Language + audio mode */}
         <div className="rounded-2xl bg-zinc-900 p-3">
-          <p className="mb-2 text-xs uppercase tracking-wide text-zinc-500">
-            Partner audio · you hear {languageLabel(myLanguage)}
-          </p>
+          <label className="mb-2 flex items-center justify-between gap-2 text-xs uppercase tracking-wide text-zinc-500">
+            Partner audio · you hear
+            <select
+              value={listenLanguage}
+              onChange={(e) => changeListenLanguage(e.target.value)}
+              className="rounded-lg border border-zinc-700 bg-zinc-950 px-2 py-1 text-sm normal-case tracking-normal text-zinc-100 outline-none focus:border-indigo-500"
+            >
+              {OUTPUT_LANGUAGES.map((l) => (
+                <option key={l.code} value={l.code}>
+                  {l.flag} {l.label}
+                </option>
+              ))}
+            </select>
+          </label>
           <div className="grid grid-cols-3 gap-2 text-sm">
             {(
               [
@@ -310,6 +436,26 @@ export default function CallScreen({
                 {label}
               </button>
             ))}
+          </div>
+        </div>
+
+        {/* Live transcript of the translation */}
+        <div className="rounded-2xl bg-zinc-900 p-3">
+          <p className="mb-2 text-xs uppercase tracking-wide text-zinc-500">
+            Transcript
+          </p>
+          <div ref={transcriptRef} className="max-h-40 space-y-1 overflow-y-auto pr-1 text-sm">
+            {transcriptLines.length === 0 && !partialLine && (
+              <p className="text-zinc-600">
+                What your partner says appears here, translated.
+              </p>
+            )}
+            {transcriptLines.map((line, i) => (
+              <p key={i} className="text-zinc-200">
+                {line}
+              </p>
+            ))}
+            {partialLine && <p className="italic text-zinc-400">{partialLine}…</p>}
           </div>
         </div>
 

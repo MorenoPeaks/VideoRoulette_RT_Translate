@@ -83,6 +83,9 @@ export default function Home() {
           socket={socketRef.current}
           onNext={nextPartner}
           onHangUp={hangUp}
+          onLanguageChange={(language) =>
+            setProfile((p) => (p ? { ...p, language } : p))
+          }
         />
       )}
     </main>
