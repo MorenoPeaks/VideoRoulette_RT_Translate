@@ -5,6 +5,8 @@ import {
   Room,
   RoomEvent,
   Track,
+  createLocalTracks,
+  type LocalTrack,
   type RemoteTrack,
   type RemoteTrackPublication,
 } from "livekit-client";
@@ -70,6 +72,7 @@ export default function CallScreen({
     const room = new Room();
     let translationSession: TranslationSession | null = null;
     let translationStarting = false;
+    let localTracks: LocalTrack[] = [];
     let disposed = false;
     const provider = new OpenAIRealtimeTranslation(match.self.identity);
     let subtitleBuffer = "";
@@ -134,16 +137,13 @@ export default function CallScreen({
       // "partner left" overlay instead of leaving it stuck on screen.
       room.on(RoomEvent.ParticipantConnected, () => setPartnerLeft(false));
 
-      // Turn the camera/mic on FIRST and show the local preview. This proves
-      // the permissions work and gives instant feedback even if the LiveKit
-      // connection (next step) fails.
+      // Acquire camera/mic for the local preview WITHOUT publishing —
+      // publishing requires an established room connection, which comes next.
       try {
-        await room.localParticipant.enableCameraAndMicrophone();
-        const camPub = room.localParticipant.getTrackPublication(
-          Track.Source.Camera,
-        );
-        if (camPub?.track && localVideoRef.current) {
-          camPub.track.attach(localVideoRef.current);
+        localTracks = await createLocalTracks({ audio: true, video: true });
+        const videoTrack = localTracks.find((t) => t.kind === Track.Kind.Video);
+        if (videoTrack && localVideoRef.current) {
+          videoTrack.attach(localVideoRef.current);
         }
       } catch (err) {
         console.error("camera/microphone error:", err);
@@ -153,12 +153,17 @@ export default function CallScreen({
           );
         return;
       }
+      if (disposed) return;
 
-      // Now join the room. A wrong/unreachable LIVEKIT_URL is the usual
-      // failure here (e.g. an insecure ws:// URL on an https:// site, or the
-      // server's LiveKit env vars not set), so surface the real reason.
+      // Now join the room and publish the tracks. A wrong/unreachable
+      // LIVEKIT_URL is the usual failure here (e.g. an insecure ws:// URL on
+      // an https:// site, or the server's LiveKit env vars not set), so
+      // surface the real reason.
       try {
         await room.connect(match.livekitUrl, match.token);
+        for (const track of localTracks) {
+          await room.localParticipant.publishTrack(track);
+        }
         // Tracks published before we attached the listener:
         for (const participant of room.remoteParticipants.values()) {
           for (const pub of participant.trackPublications.values()) {
@@ -189,6 +194,7 @@ export default function CallScreen({
       disposed = true;
       socket.off("partner:left", onPartnerLeft);
       translationSession?.stop();
+      for (const track of localTracks) track.stop();
       void room.disconnect();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
