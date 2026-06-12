@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
 import Lobby from "@/components/Lobby";
 import CallScreen from "@/components/CallScreen";
+import SearchingScreen from "@/components/SearchingScreen";
 import { SERVER_URL } from "@/lib/config";
 import type { MatchFoundPayload } from "@/lib/types";
 
@@ -72,18 +73,7 @@ export default function Home() {
         <Lobby onStart={startSearch} error={error} initialProfile={profile} />
       )}
 
-      {stage.name === "searching" && (
-        <div className="flex min-h-screen flex-col items-center justify-center gap-6">
-          <div className="h-12 w-12 animate-spin rounded-full border-4 border-indigo-500 border-t-transparent" />
-          <p className="text-lg text-zinc-300">Looking for someone to talk to…</p>
-          <button
-            onClick={cancelSearch}
-            className="rounded-lg border border-zinc-700 px-4 py-2 text-sm hover:bg-zinc-800"
-          >
-            Cancel
-          </button>
-        </div>
-      )}
+      {stage.name === "searching" && <SearchingScreen onCancel={cancelSearch} />}
 
       {stage.name === "call" && profile && socketRef.current && (
         <CallScreen

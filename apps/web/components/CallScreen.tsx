@@ -25,7 +25,7 @@ type TranslationStatus = "idle" | "connecting" | "active" | "error";
 const VOLUMES: Record<AudioMode, [number, number]> = {
   translated: [0, 1],
   original: [1, 0],
-  both: [0.2, 1], // interpreter style: original quietly in the background
+  both: [0.05, 1], // interpreter style: original barely audible underneath
 };
 
 export default function CallScreen({
